@@ -4,6 +4,7 @@ updates:
 1. generate suffix in batches
 2. output the generated suffices to a file
 3. log the running hours and memory usage 
+4. also save the adversarial suffix as a new column
 """
 
 import nanogcg
@@ -101,7 +102,7 @@ def process(model, tokenizer, draft_model, draft_tokenizer, prompt, target):
 
     # print(f"Prompt:\n{messages[-1]['content']}\n")
     # print(f"Generation:\n{tokenizer.batch_decode(output[:, input.shape[1]:], skip_special_tokens=True)[0]}")
-    return p, r
+    return p, r, result.best_string  # also return the suffix
 
 
 def main(MODEL_NAME, DRAFT_MODEL_NAME, output_file, start_time, log_file, data_path):  # for batch processing
@@ -119,11 +120,11 @@ def main(MODEL_NAME, DRAFT_MODEL_NAME, output_file, start_time, log_file, data_p
     results = []  
     for idx, row in df.iterrows():
         print(f"processing row {idx + 1} / {len(df)}")
-        p, r = process(model, tokenizer, draft_model, draft_tokenizer, row['Goal'], row['Target'])
-        results.append([p, r])
+        p, r, suffix = process(model, tokenizer, draft_model, draft_tokenizer, row['Goal'], row['Target'])
+        results.append([p, r, suffix])
     
     # save the results:
-    results_df = pd.DataFrame(results, columns=['Prompt', 'Response'])
+    results_df = pd.DataFrame(results, columns=['Prompt', 'Response', 'Suffix'])
     results_df.to_csv(output_file, index=False)
     print(f"Results save to {output_file}")
 
@@ -134,8 +135,8 @@ def main(MODEL_NAME, DRAFT_MODEL_NAME, output_file, start_time, log_file, data_p
 if __name__ == "__main__":
     MODEL_NAME = "mistralai/Mistral-7B-Instruct-v0.3"
     DRAFT_MODEL_NAME = "openai-community/gpt2"
-    output_file = "results.csv"
+    output_file = "result.csv"
     start_time = time.time()
-    log_file = "experiment_log.txt"
+    log_file = "log.txt"
     data_path = "jbbharm.csv"
     main(MODEL_NAME, DRAFT_MODEL_NAME, output_file, start_time, log_file, data_path)
