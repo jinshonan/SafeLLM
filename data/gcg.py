@@ -79,9 +79,10 @@ def process(model, tokenizer, draft_model, draft_tokenizer, prompt, target):
 
     messages = [{"role": "user", "content": prompt}]
 
-    config = GCGConfig(
+    config = GCGConfig(  # config prams to pass to the run
         verbosity="DEBUG",
         probe_sampling_config=probe_sampling_config,
+        batch_size=32,  # change the number of candidates process at the same time (3090 can't bear it)
     )
 
     result = nanogcg.run(
