@@ -1,15 +1,21 @@
 # Extract soft labels from the model
+# Batch 4
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from datasets import load_from_disk, DatasetDict
 import numpy as np
 from tqdm import tqdm
+import time
+from datetime import timedelta
+
+# Start timer
+start_time = time.time()
 
 # -------------------
 # Load Teacher Model
 # -------------------
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"  # use GPU only
 
 teacher_model = AutoModelForCausalLM.from_pretrained(
     "mistralai/Mistral-7B-Instruct-v0.3",
@@ -17,6 +23,9 @@ teacher_model = AutoModelForCausalLM.from_pretrained(
     torch_dtype=torch.float16
 )
 tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-Instruct-v0.3")
+# set a pad token
+if tokenizer.pad_token is None:
+    tokenizer.pad_token = tokenizer.eos_token
 
 # -------------------
 # Load Dataset
@@ -39,25 +48,22 @@ def make_prompt(user_request: str) -> str:
     )
 
 # get probability distribution over "Yes" and "No"
-def get_soft_labels(prompt: str):
-    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+def get_soft_labels_batch(batch):
+    prompts = [make_prompt(p) for p in batch["prompt"]]
+    inputs = tokenizer(prompts, return_tensors="pt", padding=True, truncation=True).to(device)
 
     with torch.no_grad():
         outputs = teacher_model(**inputs)
 
-    # get logits for the *next token*
-    logits = outputs.logits[0, -1, :]  # shape: (vocab_size,)
+    logits = outputs.logits[:, -1, :]  # (batch, vocab_size)
 
-    # extract logits for "Yes" and "No"
-    yes_id = tokenizer("Yes", add_special_tokens=False).input_ids[0]
-    no_id = tokenizer("No", add_special_tokens=False).input_ids[0]
+    yes_id = tokenizer.encode("Yes", add_special_tokens=False)[0]
+    no_id  = tokenizer.encode("No", add_special_tokens=False)[0]
 
-    yes_logit = logits[yes_id].item()
-    no_logit = logits[no_id].item()
+    yes_no_logits = logits[:, [yes_id, no_id]]
+    probs = torch.softmax(yes_no_logits, dim=-1)
 
-    probs = torch.softmax(torch.tensor([yes_logit, no_logit]), dim=-1).cpu().numpy()
-
-    return {"soft_labels": probs.tolist()}  # [p_yes, p_no]
+    return {"soft_labels": probs.cpu().numpy().tolist()}
 
 # -------------------
 # Apply to Dataset
@@ -65,8 +71,10 @@ def get_soft_labels(prompt: str):
 
 def add_soft_labels(dataset):
     return dataset.map(
-        lambda x: get_soft_labels(make_prompt(x["prompt"])),
-        batched=False
+        get_soft_labels_batch,
+        batched=True,
+        batch_size=4,   # safe for 3090, can try 8 if memory is fine
+        desc="Adding soft labels"
     )
 
 train_dataset = add_soft_labels(train_dataset)
@@ -84,4 +92,10 @@ processed = DatasetDict({
 
 processed.save_to_disk("aegis_with_softlabels")
 
+# End timer
+end_time = time.time()
+elapsed_seconds = end_time - start_time
+elapsed_hours = elapsed_seconds / 3600
+
 print("✅ Saved datasets with soft labels at: aegis_with_softlabels")
+print(f"⏱️ Total runtime: {elapsed_hours:.2f} hours ({str(timedelta(seconds=int(elapsed_seconds)))})")
