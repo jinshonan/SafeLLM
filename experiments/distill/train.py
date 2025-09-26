@@ -1,7 +1,10 @@
-# -----------------------------------------------
-# safety distillation with soft labels, notes below
-# -----------------------------------------------
-# 1. clean_aegis is the part of of the original datasets that match to my test results
+"""
+safety distillation with soft labels, notes below
+
+1. clean_aegis is the part of of the original datasets that match to my test results
+2. full param fine-tuning first 
+3. classifier output: 1 (safe), 0 (unsafe)
+"""
 
 
 import torch
@@ -11,8 +14,7 @@ from transformers import AutoTokenizer, AutoModelForSequenceClassification, Adam
 from datasets import load_from_disk
 from tqdm import tqdm
 import numpy as np
-from sklearn.base import accuracy_score
-from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix
+from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, accuracy_score
 import wandb
 import os
 
@@ -38,8 +40,8 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 # Initialize wandb ONCE at the beginning
 # -------------------
 wandb.init(
-    entity="your-entity-name",  # your wandb username/team
-    project="deberta-soft-labels",  # replace with your project name
+    entity="jin-science-tokyo",  # your wandb username/team
+    project="SafeLLM",  # replace with your project name
     config={
         "model_name": MODEL_NAME,
         "batch_size": BATCH_SIZE,
@@ -70,9 +72,19 @@ tokenized = datasets.map(tokenize_fn, batched=True)
 def collate_fn(batch):
     input_ids = torch.tensor([x["input_ids"] for x in batch])
     attention_mask = torch.tensor([x["attention_mask"] for x in batch])
-    labels = torch.tensor([x["prompt_label"] for x in batch])            # hard labels
-    soft_labels = torch.tensor([x["soft_labels"] for x in batch]) # soft labels [p_yes, p_no]
-    return {"input_ids": input_ids, "attention_mask": attention_mask, "labels": labels, "soft_labels": soft_labels}
+
+    # Map hard labels from str -> int
+    label_map = {"unsafe": 0, "safe": 1}
+    labels = torch.tensor([label_map[x["prompt_label"]] for x in batch], dtype=torch.long)
+
+    # soft labels [p_unsafe, p_safe]
+    soft_labels = torch.tensor([x["soft_labels"] for x in batch], dtype=torch.float32) 
+    return {
+        "input_ids": input_ids, 
+        "attention_mask": attention_mask, 
+        "labels": labels, 
+        "soft_labels": soft_labels
+    }
 
 train_loader = DataLoader(tokenized["train"], batch_size=BATCH_SIZE, shuffle=True, collate_fn=collate_fn)
 val_loader   = DataLoader(tokenized["validation"], batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
@@ -82,6 +94,8 @@ val_loader   = DataLoader(tokenized["validation"], batch_size=BATCH_SIZE, shuffl
 # -------------------
 def init_model():
     model = AutoModelForSequenceClassification.from_pretrained(MODEL_NAME, num_labels=2).to(DEVICE)
+    print(f"😍 Model loaded successfully on {model.device} with dtype {model.dtype}")
+
     optimizer = AdamW(model.parameters(), lr=LR)
     num_training_steps = EPOCHS * len(train_loader)
     scheduler = get_scheduler("linear", optimizer=optimizer, num_warmup_steps=0, num_training_steps=num_training_steps)
@@ -129,7 +143,11 @@ def evaluate(model, loader):
 
     # Calculate metrics
     acc = accuracy_score(all_labels, all_preds)
-    auc = roc_auc_score(all_labels, all_probs)
+    try:
+        auc = roc_auc_score(all_labels, all_probs)
+    except ValueError:
+        auc = float("nan")
+
     
     print(classification_report(all_labels, all_preds))
     print(f"AUC: {auc:.4f}")
@@ -142,6 +160,7 @@ def evaluate(model, loader):
 def train(alpha):
     model, optimizer, scheduler = init_model()
     print(f"\n🚀 Training with α={alpha:.1f} (CE weight), (1-α)={1-alpha:.1f} (KL weight)")
+    best_auc = -float("inf")  # for tracking best model for saving
 
     for epoch in range(EPOCHS):
         model.train()
@@ -177,12 +196,18 @@ def train(alpha):
             loop.set_postfix(loss=loss.item())
 
         # Save the final model
-        save_dir = f"model_alpha_{alpha:.1f}"
-        os.makedirs(save_dir, exist_ok=True)
-        model.save_pretrained(save_dir)
-        tokenizer.save_pretrained(save_dir)
+        # save_dir = f"model_alpha_{alpha:.1f}_epoch{epoch+1}"
+        # os.makedirs(save_dir, exist_ok=True)
+        # model.save_pretrained(save_dir)
+        # tokenizer.save_pretrained(save_dir)
 
         val_loss, val_acc, val_auc = evaluate(model, val_loader)
+
+        # Save the best model based on validation AUC
+        if val_auc > best_auc:
+            best_auc = val_auc
+            model.save_pretrained(f"best_model_alpha_{alpha:.1f}")
+            tokenizer.save_pretrained(f"best_model_alpha_{alpha:.1f}")
 
         # Log epoch metrics
         wandb.log({

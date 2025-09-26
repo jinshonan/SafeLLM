@@ -1,5 +1,7 @@
-# Extract soft labels from the model
-# Batch 4
+"""
+Extract soft labels from the model
+Batch = 4
+"""
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
