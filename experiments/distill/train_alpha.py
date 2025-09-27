@@ -1,9 +1,7 @@
 """
 safety distillation with soft labels, notes below
 
-1. clean_aegis is the part of of the original datasets that match to my test results
-2. full param fine-tuning first 
-3. classifier output: 1 (safe), 0 (unsafe)
+1. for reproduction with a set alpha
 """
 
 
@@ -15,7 +13,6 @@ from datasets import load_from_disk
 from tqdm import tqdm
 import numpy as np
 from sklearn.metrics import classification_report, roc_auc_score, confusion_matrix, accuracy_score
-import wandb
 import os
 
 
@@ -34,23 +31,6 @@ LR = 2e-5
 EPOCHS = 10
 MAX_LEN = 256
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-
-# -------------------
-# Initialize wandb ONCE at the beginning
-# -------------------
-wandb.init(
-    entity="jin-science-tokyo",  # your wandb username/team
-    project="SafeLLM",  # replace with your project name
-    config={
-        "model_name": MODEL_NAME,
-        "batch_size": BATCH_SIZE,
-        "learning_rate": LR,
-        "epochs": EPOCHS,
-        "max_length": MAX_LEN,
-        "dataset": "clean_aegis"
-    }
-)
 
 
 # -------------------
@@ -203,29 +183,12 @@ def train(alpha):
         #     model.save_pretrained(f"best_model_alpha_{alpha:.1f}")
         #     tokenizer.save_pretrained(f"best_model_alpha_{alpha:.1f}")
 
-        # Log epoch metrics 
-        # each alpha has EPOCHS logs and charts on wandb will be per alpha which has EPOCHS points for x-axis
-        wandb.log({
-            f"epoch_train_loss_alpha_{alpha:.1f}": np.mean(epoch_losses),
-            f"val_loss_alpha_{alpha:.1f}": val_loss,
-            f"val_acc_alpha_{alpha:.1f}": val_acc,
-            f"val_auc_alpha_{alpha:.1f}": val_auc,
-            "alpha": alpha,
-            "epoch": epoch + 1
-        })
-
         print(f"Epoch {epoch+1}/{EPOCHS} | Train Loss: {np.mean(epoch_losses):.4f} | Val Loss: {val_loss:.4f} | Val Acc: {val_acc:.4f} | Val Auc: {val_auc:.4f}")
 
     return model
 
 # -------------------
-# Run Experiments for α from 1.0 → 0.0
+# reproduce α = 3
 # -------------------
-for alpha in np.linspace(1.0, 0.0, 11):  # 1.0, 0.9, 0.8, ..., 0.0
-    train(alpha)
-
-
-# -------------------
-# Finish the wandb run
-# -------------------
-wandb.finish()
+alpha = 3
+train(alpha)
